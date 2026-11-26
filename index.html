@@ -3355,7 +3355,7 @@ function trapDrawerFocus(event){
 async function copyIBAN(){
   const iban=S.data?.account?.iban;
   if(!iban) {
-    toast('No account IBAN assigned. Please contact finance@hapoaiim.com');
+    toast('Could not copy IBAN. Please copy it manually');
     return;
   }
   try{
