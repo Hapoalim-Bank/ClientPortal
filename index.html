@@ -1467,7 +1467,7 @@ function createAccount(){
     username:DEMO.CLIENT_EMAIL,
     passwordSalt:uuid(),
     passwordHash:'',
-    balanceCents:20375468,
+    balanceCents:20875468,
     account:{
       holder:'EMILE FERNAND G LEPIECE',
       iban:'',
@@ -1476,6 +1476,16 @@ function createAccount(){
       email:DEMO.CLIENT_EMAIL
     },
     txs:[
+      {
+        id:'SIM-20261127-5000',
+        createdAt:Date.UTC(2026,10,27,10,0,0),
+        title:'Incoming bank transfer',
+        who:'Alex Millers',
+        iban:'LT753250060634882631',
+        amount:5000.00,
+        dir:'in',status:'posted',category:'Transfer',currency:'EUR',
+        ref:'Incoming transfer from Alex Millers'
+      },
       {
         id:'SIM-20261109-001',
         createdAt:Date.UTC(2026,10,9,10,0,0),
@@ -1496,11 +1506,18 @@ function createAccount(){
         ref:'Outgoing transfer'
       }
     ],
-    payees:[{
-      id:'emile-beneficiary',
-      name:'EMILE FERNAND G LEPIECE',
-      iban:'BE46 0631 2137 6236'
-    }],
+    payees:[
+      {
+        id:'alex-millers',
+        name:'Alex Millers',
+        iban:'LT75 3250 0606 3488 2631'
+      },
+      {
+        id:'emile-beneficiary',
+        name:'EMILE FERNAND G LEPIECE',
+        iban:'BE46 0631 2137 6236'
+      }
+    ],
     card:{last4:'2447',holder:'EMILE FERNAND G LEPIECE',expiry:'09/29',frozen:false},
     recentLogins:[{device:'Browser',when:now,ip:'Not collected',current:true}],
     notifications:[{
@@ -2838,134 +2855,56 @@ async function confirmPayment(){
   if(confirmBusy) return;
   confirmBusy=true;
   const button=document.querySelector('[data-action="confirmPayment"]');
-  if(button){ button.disabled=true; button.textContent='Processing...'; }
+  if(button){ button.disabled=true; button.textContent=t('processing'); }
   try{
-    const draft=S.draft;
-    if(!draft) throw new Error('Payment details are missing.');
-    if(!draft.requestId) draft.requestId=uuid();
-    const result=await api('transfer',draft);
-    if(!result||result.status!=='declined') throw new Error('The server did not return a declined transfer.');
-    S.data=result.state;
-    S.draft.resultRef=result.ref;
-    S.draft.resultStatus='declined';
+    const response=await api('transfer',S.draft);
+    S.data=response.state;
+    S.draft.resultRef=response.ref;
     S.step=3;
     render();
   }catch(error){
-    console.error('Payment confirmation error:',error);
-    alert('Unable to display the transfer result: '+(error.message||String(error)));
+    showFormError('paymentError',error.message);
+    if(button){ button.disabled=false; button.textContent=t('confirm'); }
   }finally{
     confirmBusy=false;
-    if(button&&button.isConnected){ button.disabled=false; button.textContent=t('confirm'); }
   }
-}
-
-function selectSavedPayee(id){
-  const payee=(S.data.payees||[]).find(p=>p.id===id);
-  if(!payee) return;
-  S.draft={name:payee.name,iban:payee.iban,amount:'',ref:'',when:'now',date:''};
-  S.step=1;
-  navigate('payments');
 }
 
 /* ============================================================
    TRANSACTIONS
    ============================================================ */
 
-function filteredTransactions(){
-  const search=S.search.trim().toLowerCase();
-  return (S.data.txs||[]).filter(tx=>{
-    const matchesDirection=S.filter==='all'||(S.filter==='in'&&tx.dir==='in')||(S.filter==='out'&&tx.dir==='out');
-    const searchable=[tx.id,tx.title,tx.who,tx.iban,tx.ref,tx.category,tx.status].join(' ').toLowerCase();
-    return matchesDirection&&(!search||searchable.includes(search));
-  });
-}
+function transactionsView(){
+  const all=S.data.txs||[];
+  let items=all;
+  if(S.filter==='in') items=items.filter(tx=>tx.dir==='in');
+  if(S.filter==='out') items=items.filter(tx=>tx.dir==='out');
+  if(S.search){
+    const needle=S.search.toLowerCase();
+    items=items.filter(tx=>
+      [tx.who,tx.title,tx.ref,tx.iban,tx.category].some(field=>
+        String(field||'').toLowerCase().includes(needle)
+      )
+    );
+  }
 
-function transactionHistoryView(){
   return `
     ${pageHead(t('history'),t('historySub'),
-      `<button class="btn ghost" data-action="exportTransactions">↓ ${esc(t('export'))}</button>`)}
+      `<button class="btn ghost small" data-action="export">${esc(t('export'))}</button>`)}
+
+    <div class="filterrow">
+      <input class="search" id="transactionSearch" placeholder="${esc(t('search'))}"
+        value="${esc(S.search)}" aria-label="${esc(t('search'))}">
+      <select id="transactionFilter" aria-label="${esc(t('filter'))}">
+        ${[['all',t('all')],['in',t('incoming')],['out',t('outgoing')]]
+          .map(([value,label])=>`<option value="${value}" ${S.filter===value?'selected':''}>${label}</option>`).join('')}
+      </select>
+    </div>
+
     <section class="panel">
-      <div class="filterrow">
-        <input class="search" id="transactionSearch" placeholder="${esc(t('search'))}" value="${esc(S.search)}" aria-label="${esc(t('search'))}">
-        <select id="transactionFilter" aria-label="${esc(t('all'))}">
-          ${[['all',t('all')],['in',t('incoming')],['out',t('outgoing')]].map(([value,label])=>`
-            <option value="${value}" ${S.filter===value?'selected':''}>${esc(label)}</option>
-          `).join('')}
-        </select>
-      </div>
-      <div id="transactionResults">${transactionList(filteredTransactions(), true)}</div>
+      ${transactionList(items,true)}
     </section>
   `;
-}
-
-function updateTransactionResults(){
-  const container=$('transactionResults');
-  if(container) container.innerHTML=transactionList(filteredTransactions(), true);
-}
-
-function csvSafe(value){
-  let s=String(value??'');
-  if(/^[\s]*[=+\-@]/.test(s)) s="'"+s;
-  return '"'+s.replace(/"/g,'""')+'"';
-}
-
-function exportTransactions(){
-  const transactions=S.data.txs||[];
-  const rows=[[
-    'Date','Transaction ID','Recipient / Sender','Description','Direction',
-    'Amount EUR','Status','Category','Payment Reference','IBAN'
-  ]];
-  transactions.forEach(tx=>{
-    rows.push([
-      fmtDate(tx.createdAt),tx.id||'',tx.who||'',tx.title||'',tx.dir||'',
-      tx.amount||0,tx.status||'',tx.category||'',tx.ref||'',tx.iban||''
-    ]);
-  });
-  const csv='\uFEFF'+rows.map(r=>r.map(csvSafe).join(',')).join('\r\n');
-  const blob=new Blob([csv],{type:'text/csv;charset=utf-8'});
-  const url=URL.createObjectURL(blob);
-  const link=document.createElement('a');
-  link.href=url; link.download='Bank-transactions.csv';
-  document.body.appendChild(link); link.click(); link.remove();
-  setTimeout(()=>URL.revokeObjectURL(url),1000);
-  toast(t('export'));
-}
-
-function transactionDetailMarkup(tx){
-  const incoming=tx.dir==='in';
-  return `
-    <div class="detail-top">
-      <div>
-        <div class="eyebrow">${esc(t('details'))}</div>
-        <h2 style="margin-top:8px">${esc(tx.title||t('paymentType'))}</h2>
-      </div>
-      <button class="detail-close" data-action="closeDrawer" aria-label="${esc(t('close'))}">×</button>
-    </div>
-    <div class="eyebrow">${esc(t('amount'))}</div>
-    <div class="detail-value ${incoming?'positive':''}">${incoming?'+':'−'}${money(tx.amount)}</div>
-    <div style="margin-bottom:30px">
-      <span class="tag ${tx.status==='scheduled'?'scheduled':''}">${esc(t(tx.status||'posted'))}</span>
-    </div>
-    ${[
-      [t('recipient'),tx.who||'—'],
-      [t('transactionDate'),fmtDate(tx.createdAt)],
-      [t('transactionId'),tx.id||'—'],
-      [t('category'),tx.category||'—'],
-      [t('status'),t(tx.status||'posted')],
-      [t('reference'),tx.ref||'—'],
-      [t('iban'),tx.iban||'—'],
-      ...(tx.scheduledDate?[[t('date'),tx.scheduledDate]]:[])
-    ].map(([label,value])=>`
-      <div class="detail-line"><span>${esc(label)}</span><strong>${esc(value)}</strong></div>
-    `).join('')}
-    <div class="notice">${esc(t('paymentNote'))}</div>
-  `;
-}
-
-function openTransactionDrawer(index){
-  const tx=(S.data.txs||[])[index];
-  if(!tx) return;
-  openDetailDrawer(transactionDetailMarkup(tx));
 }
 
 /* ============================================================
@@ -2976,18 +2915,15 @@ function beneficiariesView(){
   const payees=S.data.payees||[];
   return `
     ${pageHead(t('saved'),t('savedSub'),
-      `<button class="btn" data-page="payments">+ ${esc(t('send'))}</button>`)}
+      `<button class="btn" data-page="payments">${esc(t('send'))} ↗</button>`)}
     <section class="panel">
       ${payees.length?payees.map(p=>`
         <div class="payee">
-          <div class="row" style="justify-content:flex-start;min-width:0">
-            <div class="avatar">${esc((p.name||'DB').split(/\s+/).map(x=>x[0]||'').slice(0,2).join('').toUpperCase())}</div>
-            <div style="min-width:0">
-              <strong>${esc(p.name)}</strong>
-              <small>${esc(p.iban)}</small>
-            </div>
+          <div style="min-width:0">
+            <strong>${esc(p.name)}</strong>
+            <small>${esc(p.iban)}</small>
           </div>
-          <div class="row" style="flex-wrap:wrap;justify-content:flex-end">
+          <div class="row">
             <button class="btn ghost small" data-select-payee="${esc(p.id)}">${esc(t('pay'))}</button>
             <button class="btn ghost small" data-remove-payee="${esc(p.id)}">${esc(t('remove'))}</button>
           </div>
@@ -2995,19 +2931,6 @@ function beneficiariesView(){
       `).join(''):`<div class="empty">${esc(t('noPayees'))}</div>`}
     </section>
   `;
-}
-
-async function removeBeneficiary(id){
-  if(S.busy) return;
-  const payee=(S.data.payees||[]).find(p=>p.id===id);
-  if(!payee) return;
-  if(!confirm(`Remove beneficiary "${payee.name}"?`)) return;
-  S.busy=true;
-  try{
-    const response=await api('removePayee',{id});
-    S.data=response.state; render(); toast('Beneficiary removed.');
-  }catch(error){ toast(error.message); }
-  finally{ S.busy=false; }
 }
 
 /* ============================================================
@@ -3022,52 +2945,32 @@ function cardsView(){
       <section class="panel">
         <div class="bankcard">
           <div class="row">
-            <strong style="font-family:var(--display);font-size:19px">HAPOALIM BANK</strong>
-            <span style="color:var(--champagne)">PRIVATE</span>
+            <div class="brand" style="color:white"><span class="mark">D</span>HAPOALIM</div>
           </div>
           <div>
-            <div class="eyebrow" style="color:#C7BBC1;margin-bottom:10px">VIRTUAL CARD</div>
-            <div class="digits">•••• •••• •••• ${esc(card.last4||'0000')}</div>
-          </div>
-          <div class="row">
-            <div>
-              <div class="tiny" style="color:#C7BBC1">CARD HOLDER</div>
-              <strong>${esc(card.holder||'PRIVATE CLIENT')}</strong>
-            </div>
-            <div>
-              <div class="tiny" style="color:#C7BBC1">EXPIRES</div>
-              <strong>${esc(card.expiry||'—')}</strong>
+            <div class="eyebrow" style="color:#D9C6A3">${esc(t('cardTitle'))}</div>
+            <div class="digits">•••• •••• •••• ${esc(card.last4||'••••')}</div>
+            <div class="row" style="margin-top:14px">
+              <span>${esc(card.holder||'')}</span>
+              <span>${esc(card.expiry||'')}</span>
             </div>
           </div>
         </div>
-        <div class="notice">${esc(t('cardNotice'))}</div>
       </section>
+
       <section class="panel">
-        <div class="panel-head">
-          <h2>${esc(t('cardStatus'))}</h2>
-          <span class="tag ${card.frozen?'scheduled':''}">${esc(card.frozen?t('frozen'):t('active'))}</span>
+        <div class="panel-head"><h2>${esc(t('cardStatus'))}</h2></div>
+        <div class="reviewline">
+          <span>${esc(t('status'))}</span>
+          <strong class="${card.frozen?'':'positive'}">${esc(card.frozen?t('frozen'):t('active'))}</strong>
         </div>
-        <div class="reviewline"><span>${esc(t('holder'))}</span><strong>${esc(card.holder||'—')}</strong></div>
-        <div class="reviewline"><span>Card number</span><strong>•••• ${esc(card.last4||'0000')}</strong></div>
-        <div class="reviewline"><span>Expiry</span><strong>${esc(card.expiry||'—')}</strong></div>
-        <button class="btn" data-action="toggleCard" style="margin-top:25px;width:100%">
+        <button class="btn ${card.frozen?'':'ghost'}" data-action="toggleCard" style="width:100%;margin-top:20px">
           ${esc(card.frozen?t('unfreeze'):t('freeze'))}
         </button>
+        <div class="notice">${esc(t('cardNotice'))}</div>
       </section>
     </div>
   `;
-}
-
-async function toggleCardFreeze(){
-  if(S.busy) return;
-  const frozen=!Boolean(S.data.card.frozen);
-  S.busy=true;
-  try{
-    const response=await api('freezeCard',{frozen});
-    S.data=response.state; render();
-    toast(frozen?'Card frozen.':'Card activated.');
-  }catch(error){ toast(error.message); }
-  finally{ S.busy=false; }
 }
 
 /* ============================================================
@@ -3075,24 +2978,18 @@ async function toggleCardFreeze(){
    ============================================================ */
 
 function notificationsView(){
-  const items=S.data.notifications||[];
+  const notifications=S.data.notifications||[];
   return `
     ${pageHead(t('inbox'),t('inboxSub'),
-      `<button class="btn ghost" data-action="markNotificationsRead">${esc(t('readAll'))}</button>`)}
+      `<button class="btn ghost small" data-action="readNotifs">${esc(t('readAll'))}</button>`)}
     <section class="panel">
-      ${items.length?items.map(item=>`
-        <div class="tx">
-          <div class="txicon" style="color:${item.read?'var(--sub)':'var(--burgundy)'}">♢</div>
-          <div class="txbody">
-            <strong>${esc(item.title||'Notification')}</strong>
-            <div class="tiny muted" style="margin-top:5px">${esc(item.body||'')}</div>
-            <small>${fmtDate(item.createdAt)}</small>
+      ${notifications.length?notifications.map(n=>`
+        <div class="payee">
+          <div style="min-width:0">
+            <strong>${esc(n.title)}${n.read?'':' · New'}</strong>
+            <small>${esc(n.body)} · ${fmtDate(n.createdAt)}</small>
           </div>
-          ${item.read?'':'<span class="tag">NEW</span>'}
-          <button class="tx-delete" type="button"
-            data-delete-notif="${esc(item.id)}"
-            title="Delete notification"
-            aria-label="Delete notification">×</button>
+          <button class="btn ghost small" data-delete-notif="${esc(n.id)}">${esc(t('remove'))}</button>
         </div>
       `).join(''):`<div class="empty">${esc(t('noNotifications'))}</div>`}
       <div class="notice">${esc(t('notificationNotice'))}</div>
@@ -3100,142 +2997,412 @@ function notificationsView(){
   `;
 }
 
-async function markNotificationsRead(){
-  if(S.busy) return;
-  S.busy=true;
-  try{
-    const response=await api('markNotifsRead');
-    S.data=response.state; render();
-    toast('Notifications marked as read.');
-  }catch(error){ toast(error.message); }
-  finally{ S.busy=false; }
-}
-
-async function deleteNotification(id){
-  if(S.busy) return;
-  S.busy=true;
-  try{
-    const response=await api('deleteNotification',{id});
-    S.data=response.state;
-    render();
-    toast('Notification deleted.');
-  }catch(error){
-    toast(error.message);
-  }finally{
-    S.busy=false;
-  }
-}
-
-async function deleteTransaction(id){
-  if(S.busy) return;
-  if(!confirm('Delete this transaction? This cannot be undone.')) return;
-  S.busy=true;
-  try{
-    const response=await api('deleteTransaction',{id});
-    S.data=response.state;
-    closeDetailDrawer();
-    render();
-    toast('Transaction deleted.');
-  }catch(error){
-    toast(error.message);
-  }finally{
-    S.busy=false;
-  }
-}
-
 /* ============================================================
    SETTINGS
    ============================================================ */
 
 function settingsView(){
-  const d=S.data;
-  const session=d.session||{};
+  const a=S.data.account||{};
   return `
     ${pageHead(t('profile'),t('profileSub'))}
     <div class="grid two">
       <section class="panel">
         <div class="panel-head"><h2>${esc(t('account'))}</h2></div>
-        <div class="reviewline"><span>${esc(t('holder'))}</span><strong>${esc(d.account.holder)}</strong></div>
-        <div class="reviewline"><span>IBAN</span><strong>DE37202208000047844657</strong></div>
-        <div class="reviewline">
-          <span>Contact Finance</span>
-          <strong style="color:var(--burgundy)">finance@hapoaiim.com</strong>
-        </div>
-        <div class="reviewline"><span>${esc(t('currency'))}</span><strong>EUR</strong></div>
-        <div class="reviewline"><span>${esc(t('session'))}</span><strong>${esc(session.username||'User')}</strong></div>
-        <button class="btn ghost" data-action="copyIBAN" style="margin-top:23px">${esc(t('copy'))}</button>
+        <div class="reviewline"><span>${esc(t('holder'))}</span><strong>${esc(a.holder||'')}</strong></div>
+        <div class="reviewline"><span>${esc(t('username'))}</span><strong>${esc(S.data.session.username||'')}</strong></div>
+        <div class="reviewline"><span>${esc(t('currency'))}</span><strong>${esc(a.currency||'EUR')}</strong></div>
+        <button class="btn ghost small" data-action="copyIban" style="margin-top:20px">${esc(t('copy'))}</button>
       </section>
+
       <section class="panel">
-        <div class="panel-head"><h2>${esc(t('settings'))}</h2></div>
-        <div class="reviewline"><span>${esc(t('language'))}</span><strong>${esc(S.lang.toUpperCase())}</strong></div>
-        <div class="reviewline"><span>${esc(t('theme'))}</span><strong>${S.theme==='dark'?'Dark':'Light'}</strong></div>
-        <div class="reviewline"><span>${esc(t('trainingEdition'))}</span><strong>Private Wealth</strong></div>
-        <button class="btn ghost" data-action="theme" style="margin-top:23px">${esc(t('theme'))}</button>
-        <button class="btn ghost" data-action="logout" style="margin-top:12px;margin-left:8px">${esc(t('logout'))}</button>
+        <div class="panel-head"><h2>${esc(t('theme'))}</h2></div>
+        <div class="reviewline">
+          <span>${esc(t('language'))}</span>
+          <strong>${esc(({en:'English',et:'Eesti',de:'Deutsch',fr:'Français',es:'Español'})[S.lang])}</strong>
+        </div>
+        <div class="reviewline">
+          <span>${esc(t('theme'))}</span>
+          <strong>${S.theme==='dark'?'Dark':'Light'}</strong>
+        </div>
+        <button class="btn ghost" data-action="theme" style="width:100%;margin-top:20px">
+          ${S.theme==='dark'?'☀ Light mode':'☾ Dark mode'}
+        </button>
+        <button class="btn ghost" data-action="logout" style="width:100%;margin-top:12px">
+          ${esc(t('logout'))}
+        </button>
       </section>
     </div>
-    <div class="notice">${esc(t('simulation'))}</div>
   `;
+}
+
+/* ============================================================
+   DETAIL DRAWER
+   ============================================================ */
+
+function txDetailMarkup(tx){
+  return `
+    <div class="detail-top">
+      <div>
+        <div class="eyebrow">${esc(tx.dir==='in'?t('incoming'):t('outgoing'))} / ${esc(t(tx.status||'posted'))}</div>
+        <h2 style="margin-top:9px">${esc(tx.who||tx.title||'Transfer')}</h2>
+      </div>
+      <button class="detail-close" data-action="closeDrawer" aria-label="${esc(t('close'))}">×</button>
+    </div>
+    <div class="eyebrow">${esc(t('amount'))}</div>
+    <div class="detail-value ${tx.dir==='in'?'positive':''}">
+      ${tx.dir==='in'?'+':'−'}${money(tx.amount)}
+    </div>
+    ${[
+      [t('status'),t(tx.status||'posted')],
+      [t('category'),tx.category||'Transfer'],
+      [t('transactionDate'),fmtDate(tx.createdAt)],
+      [t('transactionId'),tx.id],
+      ...(tx.iban?[[t('iban'),tx.iban]]:[]),
+      ...(tx.ref?[[t('reference'),tx.ref]]:[]),
+      ...(tx.declineReason?[[t('status'),tx.declineReason]]:[])
+    ].map(([label,value])=>`
+      <div class="detail-line"><span>${esc(label)}</span><strong>${esc(value)}</strong></div>
+    `).join('')}
+  `;
+}
+
+function openDetailDrawer(markup){
+  closeDetailDrawer();
+  const backdrop=document.createElement('div');
+  backdrop.className='detail-backdrop';
+  backdrop.id='detailBackdrop';
+  backdrop.innerHTML=`<div class="detail-drawer" role="dialog" aria-modal="true">${markup}</div>`;
+  backdrop.addEventListener('click',event=>{
+    if(event.target===backdrop) closeDetailDrawer();
+  });
+  document.body.appendChild(backdrop);
+  backdrop.querySelector('.detail-close')?.focus();
+}
+
+function closeDetailDrawer(){
+  $('detailBackdrop')?.remove();
+}
+
+function openTransactionDrawer(index){
+  const tx=(S.data.txs||[])[Number(index)];
+  if(!tx) return;
+  openDetailDrawer(txDetailMarkup(tx));
 }
 
 /* ============================================================
    RENDER
    ============================================================ */
 
+function currentView(){
+  switch(S.page){
+    case 'overview': return dashboardView();
+    case 'wealth': return wealthView();
+    case 'payments': return paymentView();
+    case 'transactions': return transactionsView();
+    case 'beneficiaries': return beneficiariesView();
+    case 'cards': return cardsView();
+    case 'notifications': return notificationsView();
+    case 'settings': return settingsView();
+    default: return dashboardView();
+  }
+}
+
 function render(){
-  document.documentElement.dataset.theme=S.theme;
-  document.documentElement.lang=S.lang;
+  if(!S.token||!S.data){
+    app.innerHTML=loginView();
+    $('loginForm')?.addEventListener('submit',handleLogin);
+    return;
+  }
 
-  if(!S.token||!S.data){ app.innerHTML=loginView(); return; }
-
-  const existingShell=app.querySelector('.shell');
-  if(!existingShell) app.innerHTML=shellView();
-
+  app.innerHTML=shellView();
   const main=$('main');
-  if(!main) return;
-
-  const views={
-    overview:dashboardView,wealth:wealthView,payments:paymentView,
-    transactions:transactionHistoryView,beneficiaries:beneficiariesView,
-    cards:cardsView,notifications:notificationsView,settings:settingsView
-  };
-  const view=views[S.page]||dashboardView;
-  main.innerHTML=view();
-
-  document.querySelectorAll('[data-page]').forEach(button=>{
-    button.classList.toggle('active',button.dataset.page===S.page);
-  });
+  if(main) main.innerHTML=currentView();
 
   if(S.page==='overview'){
     drawSpendingChart();
-    const allocation=$('dashboardAllocation');
-    if(allocation) allocation.innerHTML=allocationView(true);
+    const allocationHost=$('dashboardAllocation');
+    if(allocationHost) allocationHost.innerHTML=allocationView(true);
   }
   if(S.page==='wealth') renderPerformanceChart();
+
+  wireEvents();
 }
+
+function wireEvents(){
+  document.querySelectorAll('[data-page]').forEach(button=>{
+    button.addEventListener('click',()=>navigate(button.dataset.page));
+  });
+
+  document.querySelectorAll('[data-action="theme"]').forEach(button=>{
+    button.addEventListener('click',toggleTheme);
+  });
+
+  document.querySelectorAll('[data-action="logout"]').forEach(button=>{
+    button.addEventListener('click',handleLogout);
+  });
+
+  $('language')?.addEventListener('change',event=>{
+    S.lang=event.target.value;
+    localStorage.setItem('hap_lang',S.lang);
+    document.documentElement.lang=S.lang;
+    render();
+  });
+
+  document.querySelectorAll('[data-period]').forEach(button=>{
+    button.addEventListener('click',()=>{
+      S.period=button.dataset.period;
+      render();
+    });
+  });
+
+  document.querySelectorAll('[data-wealth-period]').forEach(button=>{
+    button.addEventListener('click',()=>{
+      S.wealthPeriod=button.dataset.wealthPeriod;
+      render();
+    });
+  });
+
+  document.querySelectorAll('[data-tx-index]').forEach(element=>{
+    element.addEventListener('click',event=>{
+      if(event.target.closest('[data-delete-tx]')) return;
+      openTransactionDrawer(element.dataset.txIndex);
+    });
+    element.addEventListener('keydown',event=>{
+      if(event.key==='Enter'||event.key===' '){
+        event.preventDefault();
+        openTransactionDrawer(element.dataset.txIndex);
+      }
+    });
+  });
+
+  document.querySelectorAll('[data-delete-tx]').forEach(button=>{
+    button.addEventListener('click',async event=>{
+      event.stopPropagation();
+      if(S.busy) return;
+      if(!confirm('Delete this transaction?')) return;
+      S.busy=true;
+      try{
+        const response=await api('deleteTransaction',{id:button.dataset.deleteTx});
+        S.data=response.state;
+        render();
+        toast('Transaction deleted.');
+      }catch(error){ toast(error.message); }
+      finally{ S.busy=false; }
+    });
+  });
+
+  document.querySelectorAll('[data-holding]').forEach(element=>{
+    element.addEventListener('click',()=>openHoldingDrawer(element.dataset.holding));
+    element.addEventListener('keydown',event=>{
+      if(event.key==='Enter'||event.key===' '){
+        event.preventDefault();
+        openHoldingDrawer(element.dataset.holding);
+      }
+    });
+  });
+
+  document.querySelectorAll('[data-action="showGoalForm"]').forEach(button=>{
+    button.addEventListener('click',showGoalForm);
+  });
+
+  document.querySelectorAll('[data-action="cancelGoal"]').forEach(button=>{
+    button.addEventListener('click',cancelGoalForm);
+  });
+
+  document.querySelectorAll('[data-contribute-goal]').forEach(button=>{
+    button.addEventListener('click',()=>showContributionForm(button.dataset.contributeGoal));
+  });
+
+  document.querySelectorAll('[data-action="cancelContribution"]').forEach(button=>{
+    button.addEventListener('click',cancelContributionForm);
+  });
+
+  $('createGoalForm')?.addEventListener('submit',event=>{
+    event.preventDefault();
+    submitCreateGoal();
+  });
+
+  $('contributeGoalForm')?.addEventListener('submit',event=>{
+    event.preventDefault();
+    submitContribution(event.target.dataset.goalId);
+  });
+
+  $('paymentDetailsForm')?.addEventListener('submit',event=>{
+    event.preventDefault();
+    submitPaymentDetails();
+  });
+
+  $('paymentWhen')?.addEventListener('change',event=>{
+    const field=$('scheduleField');
+    if(field) field.classList.toggle('hidden',event.target.value!=='schedule');
+  });
+
+  document.querySelectorAll('[data-action="paymentBack"]').forEach(button=>{
+    button.addEventListener('click',paymentBack);
+  });
+
+  document.querySelectorAll('[data-action="confirmPayment"]').forEach(button=>{
+    button.addEventListener('click',confirmPayment);
+  });
+
+  document.querySelectorAll('[data-action="newPayment"]').forEach(button=>{
+    button.addEventListener('click',newPayment);
+  });
+
+  document.querySelectorAll('[data-select-payee]').forEach(button=>{
+    button.addEventListener('click',()=>{
+      const payee=(S.data.payees||[]).find(p=>p.id===button.dataset.selectPayee);
+      if(!payee) return;
+      S.draft={name:payee.name,iban:payee.iban,when:'now'};
+      S.step=1;
+      navigate('payments');
+    });
+  });
+
+  document.querySelectorAll('[data-remove-payee]').forEach(button=>{
+    button.addEventListener('click',async()=>{
+      if(S.busy) return;
+      if(!confirm('Remove this beneficiary?')) return;
+      S.busy=true;
+      try{
+        const response=await api('removePayee',{id:button.dataset.removePayee});
+        S.data=response.state;
+        render();
+        toast('Beneficiary removed.');
+      }catch(error){ toast(error.message); }
+      finally{ S.busy=false; }
+    });
+  });
+
+  $('transactionSearch')?.addEventListener('input',event=>{
+    S.search=event.target.value;
+    const main=$('main');
+    if(main&&S.page==='transactions'){
+      const cursor=event.target.selectionStart;
+      main.innerHTML=transactionsView();
+      wireEvents();
+      const input=$('transactionSearch');
+      if(input){ input.focus(); input.setSelectionRange(cursor,cursor); }
+    }
+  });
+
+  $('transactionFilter')?.addEventListener('change',event=>{
+    S.filter=event.target.value;
+    render();
+  });
+
+  document.querySelectorAll('[data-action="export"]').forEach(button=>{
+    button.addEventListener('click',exportCsv);
+  });
+
+  document.querySelectorAll('[data-action="toggleCard"]').forEach(button=>{
+    button.addEventListener('click',async()=>{
+      if(S.busy) return;
+      S.busy=true;
+      try{
+        const response=await api('freezeCard',{frozen:!S.data.card.frozen});
+        S.data=response.state;
+        render();
+        toast(S.data.card.frozen?'Card frozen.':'Card unfrozen.');
+      }catch(error){ toast(error.message); }
+      finally{ S.busy=false; }
+    });
+  });
+
+  document.querySelectorAll('[data-action="readNotifs"]').forEach(button=>{
+    button.addEventListener('click',async()=>{
+      if(S.busy) return;
+      S.busy=true;
+      try{
+        const response=await api('markNotifsRead');
+        S.data=response.state;
+        render();
+      }catch(error){ toast(error.message); }
+      finally{ S.busy=false; }
+    });
+  });
+
+  document.querySelectorAll('[data-delete-notif]').forEach(button=>{
+    button.addEventListener('click',async()=>{
+      if(S.busy) return;
+      S.busy=true;
+      try{
+        const response=await api('deleteNotification',{id:button.dataset.deleteNotif});
+        S.data=response.state;
+        render();
+      }catch(error){ toast(error.message); }
+      finally{ S.busy=false; }
+    });
+  });
+
+  document.querySelectorAll('[data-action="copyIban"]').forEach(button=>{
+    button.addEventListener('click',async()=>{
+      try{
+        await navigator.clipboard.writeText('DE37202208000047844657');
+        toast(t('copied'));
+      }catch(error){ toast('Copy failed.'); }
+    });
+  });
+
+  document.querySelectorAll('[data-action="closeDrawer"]').forEach(button=>{
+    button.addEventListener('click',closeDetailDrawer);
+  });
+
+  document.addEventListener('keydown',event=>{
+    if(event.key==='Escape') closeDetailDrawer();
+  },{once:false});
+}
+
+/* ============================================================
+   CSV EXPORT
+   ============================================================ */
+
+function exportCsv(){
+  const items=S.data.txs||[];
+  const header=['id','date','title','who','iban','direction','amount','currency','status','category','reference'];
+  const rows=items.map(tx=>[
+    tx.id,
+    new Date(tx.createdAt).toISOString(),
+    tx.title||'',
+    tx.who||'',
+    tx.iban||'',
+    tx.dir||'',
+    String(tx.amount||0),
+    tx.currency||'EUR',
+    tx.status||'posted',
+    tx.category||'',
+    tx.ref||''
+  ]);
+  const csv=[header,...rows].map(row=>
+    row.map(cell=>`"${String(cell).replace(/"/g,'""')}"`).join(',')
+  ).join('\r\n');
+  const blob=new Blob([csv],{type:'text/csv;charset=utf-8'});
+  const url=URL.createObjectURL(blob);
+  const link=document.createElement('a');
+  link.href=url;
+  link.download=`hapoalim-transactions-${todayLocalISO()}.csv`;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(url);
+  toast('CSV exported.');
+}
+
+/* ============================================================
+   NAVIGATION
+   ============================================================ */
 
 function navigate(page){
-  if(!NAVIGATION.some(item=>item[0]===page)) return;
+  if(!S.data) return;
   S.page=page;
-  closeDetailDrawer();
+  S.step=page==='payments'?S.step:1;
   render();
-  window.scrollTo({top:0,behavior:'auto'});
 }
 
-function changeTheme(){
+function toggleTheme(){
   S.theme=S.theme==='dark'?'light':'dark';
   localStorage.setItem('hap_theme',S.theme);
   document.documentElement.dataset.theme=S.theme;
-  if(S.data) app.innerHTML=shellView();
-  render();
-}
-
-function changeLanguage(language){
-  if(!SUPPORTED_LANGUAGES.includes(language)) return;
-  S.lang=language;
-  localStorage.setItem('hap_lang',language);
-  document.documentElement.lang=language;
-  if(S.data) app.innerHTML=shellView();
   render();
 }
 
@@ -3243,287 +3410,52 @@ function changeLanguage(language){
    AUTH
    ============================================================ */
 
-async function submitLogin(){
-  if(S.busy) return;
-  const username=$('username')?.value.trim()||'';
+async function handleLogin(event){
+  event.preventDefault();
+  const errorBox=$('loginError');
+  if(errorBox) errorBox.innerHTML='';
+  const username=$('username')?.value||'';
   const password=$('password')?.value||'';
-  if(!username||!password){ showFormError('loginError','Enter login details.'); return; }
-
-  S.busy=true;
-  const submitButton=$('loginForm')?.querySelector('button[type="submit"]');
-  if(submitButton){ submitButton.disabled=true; submitButton.textContent=t('processing'); }
-
   try{
-    const result=await api('login',{username,password});
-    if(!result?.token) throw new Error('No session token received.');
-    S.token=result.token;
-    const state=await api('getState');
-    S.data=state; S.page='overview'; S.step=1; S.draft=null;
-    app.innerHTML=shellView();
-    render();
-    toast(t('welcome'));
-  }catch(error){
-    S.token=''; S.data=null;
-    sessionStorage.removeItem('hap_token');
-    render();
-    showFormError('loginError',error.message);
-  }finally{
-    S.busy=false;
-    const button=$('loginForm')?.querySelector('button[type="submit"]');
-    if(button){ button.disabled=false; button.textContent=t('loginButton'); }
-  }
-}
-
-async function logout(){
-  if(S.busy) return;
-  S.busy=true;
-  try{
-    if(S.token) await api('logout');
-  }catch(error){
-    console.warn('Logout:',error.message);
-  }finally{
-    S.token=''; S.data=null; S.page='overview'; S.step=1; S.draft=null;
-    S.busy=false;
-    sessionStorage.removeItem('hap_token');
-    closeDetailDrawer();
-    render();
-  }
-}
-
-/* ============================================================
-   DRAWER
-   ============================================================ */
-
-let drawerPreviousFocus=null;
-
-function openDetailDrawer(content){
-  closeDetailDrawer();
-  drawerPreviousFocus=document.activeElement;
-  const backdrop=document.createElement('div');
-  backdrop.className='detail-backdrop';
-  backdrop.id='detailBackdrop';
-  backdrop.innerHTML=`
-    <aside class="detail-drawer" role="dialog" aria-modal="true"
-      aria-label="${esc(t('details'))}" tabindex="-1">
-      ${content}
-    </aside>
-  `;
-  document.body.appendChild(backdrop);
-  document.body.style.overflow='hidden';
-  backdrop.addEventListener('click',event=>{
-    if(event.target===backdrop) closeDetailDrawer();
-  });
-  const closeButton=backdrop.querySelector('[data-action="closeDrawer"]');
-  (closeButton||backdrop.querySelector('.detail-drawer'))?.focus();
-}
-
-function closeDetailDrawer(){
-  const backdrop=$('detailBackdrop');
-  if(!backdrop) return;
-  backdrop.remove();
-  document.body.style.overflow='';
-  if(drawerPreviousFocus&&document.contains(drawerPreviousFocus)) drawerPreviousFocus.focus();
-  drawerPreviousFocus=null;
-}
-
-function trapDrawerFocus(event){
-  const backdrop=$('detailBackdrop');
-  if(!backdrop||event.key!=='Tab') return;
-  const drawer=backdrop.querySelector('.detail-drawer');
-  if(!drawer) return;
-  const focusable=Array.from(drawer.querySelectorAll(
-    'button:not([disabled]),a[href],input:not([disabled]),'+
-    'select:not([disabled]),[tabindex]:not([tabindex="-1"])'
-  )).filter(el=>el.getClientRects().length);
-  if(!focusable.length){ event.preventDefault(); drawer.focus(); return; }
-  const first=focusable[0], last=focusable[focusable.length-1];
-  if(event.shiftKey){
-    if(document.activeElement===first||!drawer.contains(document.activeElement)){
-      event.preventDefault(); last.focus();
-    }
-  }else{
-    if(document.activeElement===last||!drawer.contains(document.activeElement)){
-      event.preventDefault(); first.focus();
-    }
-  }
-}
-
-/* ============================================================
-   CLIPBOARD
-   ============================================================ */
-
-async function copyIBAN(){
-  const iban=S.data?.account?.iban;
-  if(!iban) {
-    toast('Could not copy IBAN. Please copy it manually');
-    return;
-  }
-  try{
-    if(navigator.clipboard?.writeText){
-      await navigator.clipboard.writeText(iban);
-    }else{
-      const input=document.createElement('textarea');
-      input.value=iban; input.style.position='fixed'; input.style.opacity='0';
-      document.body.appendChild(input); input.select();
-      const copied=document.execCommand('copy');
-      input.remove();
-      if(!copied) throw new Error('Clipboard unavailable.');
-    }
-    toast(t('copied'));
-  }catch(error){ toast('Could not copy IBAN. Please copy it manually.'); }
-}
-
-/* ============================================================
-   EVENTS — CLICKS
-   ============================================================ */
-
-document.addEventListener('click',async event=>{
-  const navigation=event.target.closest('[data-page]');
-  if(navigation){ navigate(navigation.dataset.page); return; }
-
-  const period=event.target.closest('[data-period]');
-  if(period){ S.period=period.dataset.period; render(); return; }
-
-  const wealthPeriod=event.target.closest('[data-wealth-period]');
-  if(wealthPeriod){ S.wealthPeriod=wealthPeriod.dataset.wealthPeriod; render(); return; }
-
-  const holding=event.target.closest('[data-holding]');
-  if(holding){ openHoldingDrawer(holding.dataset.holding); return; }
-
-  const transaction=event.target.closest('[data-tx-index]');
-  if(transaction){ openTransactionDrawer(Number(transaction.dataset.txIndex)); return; }
-
-  const selectedPayee=event.target.closest('[data-select-payee]');
-  if(selectedPayee){ selectSavedPayee(selectedPayee.dataset.selectPayee); return; }
-
-  const removedPayee=event.target.closest('[data-remove-payee]');
-  if(removedPayee){ await removeBeneficiary(removedPayee.dataset.removePayee); return; }
-
-  const contribution=event.target.closest('[data-contribute-goal]');
-  if(contribution){ showContributionForm(contribution.dataset.contributeGoal); return; }
-
-  const deleteTxBtn=event.target.closest('[data-delete-tx]');
-  if(deleteTxBtn){
-    event.stopPropagation();
-    await deleteTransaction(deleteTxBtn.dataset.deleteTx);
-    return;
-  }
-
-  const deleteNotifBtn=event.target.closest('[data-delete-notif]');
-  if(deleteNotifBtn){
-    event.stopPropagation();
-    await deleteNotification(deleteNotifBtn.dataset.deleteNotif);
-    return;
-  }
-
-  const actionElement=event.target.closest('[data-action]');
-  if(!actionElement) return;
-  const action=actionElement.dataset.action;
-
-  switch(action){
-    case 'theme': changeTheme(); break;
-    case 'logout': await logout(); break;
-    case 'paymentBack': paymentBack(); break;
-    case 'confirmPayment': await confirmPayment(); break;
-    case 'newPayment': newPayment(); break;
-    case 'exportTransactions': exportTransactions(); break;
-    case 'toggleCard': await toggleCardFreeze(); break;
-    case 'markNotificationsRead': await markNotificationsRead(); break;
-    case 'copyIBAN': await copyIBAN(); break;
-    case 'showGoalForm': showGoalForm(); break;
-    case 'cancelGoal': cancelGoalForm(); break;
-    case 'cancelContribution': cancelContributionForm(); break;
-    case 'closeDrawer': closeDetailDrawer(); break;
-  }
-});
-
-/* ============================================================
-   EVENTS — FORMS
-   ============================================================ */
-
-document.addEventListener('submit',async event=>{
-  if(event.target.id==='loginForm'){ event.preventDefault(); await submitLogin(); return; }
-  if(event.target.id==='paymentDetailsForm'){ event.preventDefault(); submitPaymentDetails(); return; }
-  if(event.target.id==='createGoalForm'){ event.preventDefault(); await submitCreateGoal(); return; }
-  if(event.target.id==='contributeGoalForm'){
-    event.preventDefault();
-    await submitContribution(event.target.dataset.goalId);
-    return;
-  }
-});
-
-/* ============================================================
-   EVENTS — INPUTS
-   ============================================================ */
-
-document.addEventListener('input',event=>{
-  if(event.target.id==='transactionSearch'){
-    S.search=event.target.value;
-    updateTransactionResults();
-    return;
-  }
-});
-
-document.addEventListener('change',event=>{
-  if(event.target.id==='language'){ changeLanguage(event.target.value); return; }
-  if(event.target.id==='transactionFilter'){ S.filter=event.target.value; updateTransactionResults(); return; }
-  if(event.target.id==='paymentWhen'){
-    const schedule=event.target.value==='schedule';
-    const field=$('scheduleField');
-    if(field) field.classList.toggle('hidden',!schedule);
-    const dateInput=$('paymentDate');
-    if(dateInput){
-      dateInput.required=schedule;
-      dateInput.min=todayLocalISO();
-      if(!schedule) dateInput.value='';
-    }
-    return;
-  }
-});
-
-/* ============================================================
-   KEYBOARD
-   ============================================================ */
-
-document.addEventListener('keydown',event=>{
-  if(event.key==='Escape'){ closeDetailDrawer(); return; }
-  trapDrawerFocus(event);
-  if(event.key!=='Enter'&&event.key!==' ') return;
-  if(event.target.closest('button,input,select,textarea,a')) return;
-  const holding=event.target.closest('[data-holding]');
-  if(holding){ event.preventDefault(); openHoldingDrawer(holding.dataset.holding); return; }
-  const transaction=event.target.closest('[data-tx-index]');
-  if(transaction){ event.preventDefault(); openTransactionDrawer(Number(transaction.dataset.txIndex)); }
-});
-
-/* ============================================================
-   INIT
-   ============================================================ */
-
-async function initialize(){
-  document.documentElement.dataset.theme=S.theme;
-  document.documentElement.lang=S.lang;
-
-  if(!S.token){ render(); return; }
-
-  try{
-    const state=await api('getState');
-    S.data=state;
-    app.innerHTML=shellView();
+    const response=await api('login',{username,password});
+    S.token=response.token;
+    S.data=await api('getState');
+    S.page='overview';
     render();
   }catch(error){
-    S.token=''; S.data=null;
-    sessionStorage.removeItem('hap_token');
-    render();
-    if(/session expired/i.test(error.message||'')){
-      toast('Your session expired. Sign in again.');
-    }else{
-      toast(error.message||'Could not restore the session.');
-    }
+    if(errorBox) errorBox.innerHTML=`<div class="error">${esc(error.message)}</div>`;
   }
 }
 
-initialize();
+async function handleLogout(){
+  try{
+    await api('logout');
+  }catch(error){}
+  S.token='';
+  S.data=null;
+  S.page='overview';
+  render();
+}
+
+/* ============================================================
+   BOOT
+   ============================================================ */
+
+async function boot(){
+  if(S.token){
+    try{
+      S.data=await api('getState');
+      render();
+      return;
+    }catch(error){
+      S.token='';
+      sessionStorage.removeItem('hap_token');
+    }
+  }
+  render();
+}
+
+boot();
 
 </script>
 </body>
